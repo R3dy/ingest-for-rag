@@ -44,8 +44,23 @@ def url_to_filename(url: str) -> str:
 
 
 def extract_rpc_calls(text: str):
-    """Find Mythic RPC call names in text."""
-    return list(set(re.findall(r"(SendMythicRPC\w+|MythicRPC\w+)", text)))
+    """Find Mythic RPC/API call names in text."""
+    return list(set(re.findall(r"(Send\w+RPC\w+|MythicRPC\w+)", text)))
+
+
+def generate_keywords(base_name: str, title: str, text: str) -> list:
+    """Generate dynamic keywords for each page."""
+    # From URL slug
+    slug_parts = [part.lower() for part in re.split(r"[-_/]", base_name) if part]
+
+    # From title
+    title_parts = [w.lower() for w in re.split(r"\W+", title) if w]
+
+    # From content: RPC/API calls
+    rpc_calls = [rpc.lower() for rpc in extract_rpc_calls(text)]
+
+    keywords = set(slug_parts + title_parts + rpc_calls)
+    return sorted(keywords)
 
 
 def main():
@@ -151,6 +166,8 @@ def main():
         raw_text = texts.get(source, "").strip()
         combined_text = " ".join(c["text"] for c in page_chunks) if page_chunks else raw_text
 
+        # Dynamic keywords per page
+        keywords = generate_keywords(base_name, title, combined_text)
         rpc_calls = extract_rpc_calls(combined_text)
 
         with open(md_path, "w", encoding="utf-8") as md_file:
@@ -159,10 +176,8 @@ def main():
             md_file.write(f"source: {source}\n")
             md_file.write(f"title: {title}\n")
             md_file.write(f"category: {category}\n")
-            if rpc_calls:
-                md_file.write("keywords: Mythic, RPC, " + ", ".join(rpc_calls) + "\n")
-            else:
-                md_file.write("keywords: Mythic\n")
+            if keywords:
+                md_file.write("keywords: " + ", ".join(keywords) + "\n")
             md_file.write(f"---\n\n")
 
             md_file.write(f"# {title}\n\n")
@@ -174,7 +189,7 @@ def main():
                 if raw_text:
                     md_file.write(raw_text + "\n")
 
-            # Promote RPCs into their own section
+            # RPC promotion
             if rpc_calls:
                 md_file.write("\n## RPC Calls\n\n")
                 for rpc in rpc_calls:
