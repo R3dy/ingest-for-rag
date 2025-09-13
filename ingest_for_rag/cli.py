@@ -48,10 +48,7 @@ def main():
 
     source = args.url
 
-    # --- Crawl or ingest ---
     if args.type == "docs":
-        if args.debug:
-            print("🔎 DEBUG: starting crawl()", flush=True)
         raw_pages = crawl(
             start_url=args.url,
             out_dir=out_dir,
@@ -60,16 +57,9 @@ def main():
             include=include,
             exclude=exclude,
         )
-        if args.debug:
-            print(f"🔎 DEBUG: crawl() returned {len(raw_pages)} pages", flush=True)
-
         chunks = []
-        for r_idx, rec in enumerate(raw_pages):
-            if args.debug:
-                print(f"   DEBUG: record {r_idx} has {len(rec['text'])} chars", flush=True)
+        for rec in raw_pages:
             chs = chunk_docs(rec["text"])
-            if args.debug:
-                print(f"   DEBUG: record {r_idx} produced {len(chs)} chunks", flush=True)
             for i, ch in enumerate(chs):
                 chunks.append({
                     "source": rec["url"],
@@ -80,21 +70,13 @@ def main():
                     "mode": "docs",
                     "title": rec.get("title"),
                 })
-
     else:
-        if args.debug:
-            print("🔎 DEBUG: starting GitHub ingest", flush=True)
         token = os.environ.get("GITHUB_TOKEN", "")
         meta = list_repo_files_github(args.url, token or None)
         recs = fetch_text_files(meta, out_dir)
         chunks = chunk_records_for_git(recs)
 
-    if args.debug:
-        print(f"🔎 DEBUG: entering embedding phase with {len(chunks)} chunks", flush=True)
-        for idx, c in enumerate(chunks[:5]):
-            print(f"   Chunk {idx}: {len(c['text'])} chars", flush=True)
-
-    # --- Output dirs ---
+    # Setup outputs
     jsonl_path = Path(out_dir, "processed", "entries.jsonl")
     md_dir = Path(out_dir, "md")
     md_dir.mkdir(parents=True, exist_ok=True)
@@ -113,12 +95,6 @@ def main():
         for i in range(0, len(chunks), args.batch_size):
             batch = chunks[i:i+args.batch_size]
             texts = [c["text"] for c in batch]
-
-            if args.debug:
-                print(f"⚡ DEBUG: embedding batch {i//args.batch_size+1} "
-                      f"of {((len(chunks)-1)//args.batch_size)+1} "
-                      f"({len(batch)} chunks)", flush=True)
-
             embs = embed_ollama(texts, model=args.model, base=args.ollama_base)
 
             ids, docs, metas = [], [], []
@@ -138,7 +114,7 @@ def main():
             written += len(batch)
             print(f"✅ Processed {written}/{len(chunks)}")
 
-    # --- Group Markdown export (one file per page) ---
+    # Markdown export (one file per page)
     pages = defaultdict(list)
     titles = {}
     for row in rows:
@@ -153,7 +129,6 @@ def main():
         with open(md_path, "w", encoding="utf-8") as md_file:
             md_file.write(f"# Source: {source}\n\n")
             for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
-                md_file.write(f"## Chunk {c['chunk_id']}\n\n")
                 md_file.write(c["text"].strip() + "\n\n")
 
     print(f"\n🎉 Ingestion complete.\n"

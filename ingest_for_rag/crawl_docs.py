@@ -9,7 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from .text_utils import safe_decode, normalize_ws, DOC_EXTS, is_probably_binary, chunk_docs
+from .text_utils import safe_decode, normalize_ws, DOC_EXTS, is_probably_binary
 
 HEADERS = {"User-Agent": "ingest-for-rag/0.1 (+https://github.com/)"}
 
@@ -35,21 +35,34 @@ def get_robots_ok(start_url: str, ignore_robots: bool) -> robotparser.RobotFileP
     return rp
 
 
-def extract_links(html: str, base_url: str) -> List[str]:
+def extract_title(html: str) -> Optional[str]:
     soup = BeautifulSoup(html, "html.parser")
-    links = set()
-    for a in soup.find_all("a", href=True):
-        href = urljoin(base_url, a["href"])
-        href, _ = urldefrag(href)
-        links.add(href)
-    return list(links)
+    if soup.title and soup.title.string:
+        return soup.title.string.strip()
+    return None
 
 
 def extract_visible_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript"]):
+
+    # Prefer <main>, fall back to <article>, else whole doc
+    main = soup.find("main") or soup.find("article") or soup
+
+    # Remove boilerplate
+    for tag in main(["script", "style", "noscript", "nav", "footer", "header", "aside"]):
         tag.decompose()
-    text = soup.get_text("\n", strip=True)
+
+    # Format inline code
+    for code in main.find_all("code"):
+        if code.string:
+            code.replace_with(f"`{code.string}`")
+
+    # Format pre/code blocks
+    for pre in main.find_all("pre"):
+        text = pre.get_text()
+        pre.replace_with(f"\n```\n{text.strip()}\n```\n")
+
+    text = main.get_text("\n", strip=True)
     return normalize_ws(text)
 
 
@@ -74,7 +87,7 @@ def crawl(start_url: str,
           include: Optional[List[str]] = None,
           exclude: Optional[List[str]] = None) -> List[Dict]:
     """
-    Returns list of raw page records: [{url, path, kind, text}]
+    Returns list of raw page records: [{url, path, kind, text, title}]
     """
     visited: Set[str] = set()
     queue: List[str] = [start_url]
@@ -109,13 +122,16 @@ def crawl(start_url: str,
             content = safe_decode(r.content)
             text = ""
             kind = "html"
+            title = None
             if url.lower().endswith((".md", ".markdown", ".txt")):
                 text = normalize_ws(content)
                 kind = "markdown" if url.lower().endswith((".md", ".markdown")) else "text"
             else:
                 text = extract_visible_text(content)
                 kind = "html"
+                title = extract_title(content)
 
+            # write raw file
             safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", url.lower())
             raw_path = raw_dir / f"{safe_name}.txt"
             raw_path.write_text(text, encoding="utf-8")
@@ -125,11 +141,15 @@ def crawl(start_url: str,
                 "path": str(raw_path),
                 "kind": kind,
                 "text": text,
+                "title": title,
             })
 
+            # enqueue links if HTML
             if "text/html" in ct:
-                links = extract_links(content, url)
-                for ln in links:
+                links = BeautifulSoup(content, "html.parser").find_all("a", href=True)
+                for a in links:
+                    ln = urljoin(url, a["href"])
+                    ln, _ = urldefrag(ln)
                     if ln not in visited and same_domain(start_url, ln):
                         queue.append(ln)
 
@@ -140,20 +160,4 @@ def crawl(start_url: str,
 
     pbar.close()
     return records
-
-
-def chunk_records_for_docs(records: List[Dict]) -> List[Dict]:
-    out: List[Dict] = []
-    for rec in records:
-        chunks = chunk_docs(rec["text"])
-        for i, ch in enumerate(chunks):
-            out.append({
-                "source": rec["url"],
-                "path": rec["path"],
-                "kind": rec["kind"],
-                "chunk_id": i,
-                "text": ch,
-                "meta": {"mode": "docs"},
-            })
-    return out
 
