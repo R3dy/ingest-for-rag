@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ingest-for-rag"
+version = "0.1.0"
+description = "CLI to ingest docs sites or GitHub repos and build high-quality embeddings for RAG (Ollama + Chroma)."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+license = { text = "MIT" }
+dependencies = [
+  "beautifulsoup4>=4.12",
+  "chardet>=5.2",
+  "chromadb>=0.5",
+  "python-dotenv>=1.0",
+  "requests>=2.32",
+  "tqdm>=4.66",
+  "markdown-it-py>=3.0",
+  "mdurl>=0.1",
+]
+
+[project.scripts]
+ingest-for-rag = "ingest_for_rag.cli:main"
+
+[tool.setuptools.packages.find]
+where = [""]
+include = ["*"]
