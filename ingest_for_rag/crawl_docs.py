@@ -1,4 +1,3 @@
-import os
 import re
 from urllib.parse import urljoin, urldefrag, urlparse
 from urllib import robotparser
@@ -11,7 +10,7 @@ from tqdm import tqdm
 
 from .text_utils import safe_decode, normalize_ws, DOC_EXTS, is_probably_binary
 
-HEADERS = {"User-Agent": "ingest-for-rag/0.1 (+https://github.com/)"}
+HEADERS = {"User-Agent": "ingest-for-rag/0.2 (+https://github.com/)"}
 
 
 def same_domain(root: str, candidate: str) -> bool:
@@ -45,22 +44,29 @@ def extract_title(html: str) -> Optional[str]:
 def extract_visible_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
-    # Prefer <main>, fall back to <article>, else whole doc
+    # Prefer <main> or <article>
     main = soup.find("main") or soup.find("article") or soup
 
-    # Remove boilerplate
+    # Remove junky elements
     for tag in main(["script", "style", "noscript", "nav", "footer", "header", "aside"]):
         tag.decompose()
 
-    # Format inline code
+    # Inline <code>
     for code in main.find_all("code"):
         if code.string:
-            code.replace_with(f"`{code.string}`")
+            code.replace_with(f"`{code.string.strip()}`")
 
-    # Format pre/code blocks
+    # Pre/code blocks with language hints
     for pre in main.find_all("pre"):
-        text = pre.get_text()
-        pre.replace_with(f"\n```\n{text.strip()}\n```\n")
+        text = pre.get_text().strip()
+        lang = "json" if text.startswith("{") or text.startswith("[") else "bash"
+        pre.replace_with(f"\n```{lang}\n{text}\n```\n")
+
+    # Convert headings to Markdown
+    for level in range(1, 7):
+        for h in main.find_all(f"h{level}"):
+            txt = h.get_text().strip()
+            h.replace_with(f"\n{'#' * level} {txt}\n")
 
     text = main.get_text("\n", strip=True)
     return normalize_ws(text)
@@ -131,7 +137,6 @@ def crawl(start_url: str,
                 kind = "html"
                 title = extract_title(content)
 
-            # write raw file
             safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", url.lower())
             raw_path = raw_dir / f"{safe_name}.txt"
             raw_path.write_text(text, encoding="utf-8")
@@ -144,10 +149,9 @@ def crawl(start_url: str,
                 "title": title,
             })
 
-            # enqueue links if HTML
+            # enqueue links
             if "text/html" in ct:
-                links = BeautifulSoup(content, "html.parser").find_all("a", href=True)
-                for a in links:
+                for a in BeautifulSoup(content, "html.parser").find_all("a", href=True):
                     ln = urljoin(url, a["href"])
                     ln, _ = urldefrag(ln)
                     if ln not in visited and same_domain(start_url, ln):

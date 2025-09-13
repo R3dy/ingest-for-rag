@@ -35,12 +35,6 @@ def parse_args():
 
 
 def url_to_filename(url: str) -> str:
-    """
-    Convert a docs URL into a filesystem-safe filename.
-    Example:
-      https://docs.mythic-c2.net/customizing/hooking-features/artifacts
-      -> customizing_hooking-features_artifacts.md
-    """
     parsed = urlparse(url)
     path = parsed.path.strip("/")
     if not path:
@@ -63,7 +57,6 @@ def main():
 
     source = args.url
 
-    # --- Crawl or ingest ---
     if args.type == "docs":
         raw_pages = crawl(
             start_url=args.url,
@@ -133,11 +126,13 @@ def main():
     # --- Markdown export (one file per page, always) ---
     pages = defaultdict(list)
     texts = {}
+    titles = {}
+
     for row in rows:
         pages[row["source"]].append(row)
         texts[row["source"]] = row["text"]
+        titles[row["source"]] = row.get("title")
 
-    # Include all crawled pages (even if no chunks)
     all_sources = set(texts.keys()) | set(pages.keys())
 
     for source in all_sources:
@@ -145,8 +140,19 @@ def main():
         base_name = url_to_filename(source)
         md_path = md_dir / f"{base_name}.md"
 
+        title = titles.get(source) or base_name.replace("_", " ").title()
+        category = "/".join(base_name.split("_")[:-1]) or "root"
+
         with open(md_path, "w", encoding="utf-8") as md_file:
-            md_file.write(f"# Source: {source}\n\n")
+            # YAML front-matter
+            md_file.write(f"---\n")
+            md_file.write(f"source: {source}\n")
+            md_file.write(f"title: {title}\n")
+            md_file.write(f"category: {category}\n")
+            md_file.write(f"---\n\n")
+
+            md_file.write(f"# {title}\n\n")
+
             if page_chunks:
                 for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
                     md_file.write(c["text"].strip() + "\n\n")
