@@ -5,6 +5,7 @@ import uuid
 import json
 from pathlib import Path
 from collections import defaultdict
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -33,6 +34,20 @@ def parse_args():
     return p.parse_args()
 
 
+def url_to_filename(url: str) -> str:
+    """
+    Convert a docs URL into a filesystem-safe filename.
+    Example:
+      https://docs.mythic-c2.net/customizing/hooking-features/artifacts
+      -> customizing_hooking-features_artifacts.md
+    """
+    parsed = urlparse(url)
+    path = parsed.path.strip("/")
+    if not path:
+        return "index"
+    return path.replace("/", "_")
+
+
 def main():
     load_dotenv()
     args = parse_args()
@@ -48,6 +63,7 @@ def main():
 
     source = args.url
 
+    # --- Crawl or ingest ---
     if args.type == "docs":
         raw_pages = crawl(
             start_url=args.url,
@@ -76,7 +92,7 @@ def main():
         recs = fetch_text_files(meta, out_dir)
         chunks = chunk_records_for_git(recs)
 
-    # Setup outputs
+    # --- Setup outputs ---
     jsonl_path = Path(out_dir, "processed", "entries.jsonl")
     md_dir = Path(out_dir, "md")
     md_dir.mkdir(parents=True, exist_ok=True)
@@ -114,22 +130,30 @@ def main():
             written += len(batch)
             print(f"✅ Processed {written}/{len(chunks)}")
 
-    # Markdown export (one file per page)
+    # --- Markdown export (one file per page, always) ---
     pages = defaultdict(list)
-    titles = {}
+    texts = {}
     for row in rows:
         pages[row["source"]].append(row)
-        titles[row["source"]] = row.get("title")
+        texts[row["source"]] = row["text"]
 
-    for source, page_chunks in pages.items():
-        safe_title = titles.get(source) or Path(source).stem or "page"
-        safe_title = safe_title.strip().replace(" ", "-").replace("/", "_").replace(":", "_")
-        md_path = md_dir / f"{safe_title}.md"
+    # Include all crawled pages (even if no chunks)
+    all_sources = set(texts.keys()) | set(pages.keys())
+
+    for source in all_sources:
+        page_chunks = pages.get(source, [])
+        base_name = url_to_filename(source)
+        md_path = md_dir / f"{base_name}.md"
 
         with open(md_path, "w", encoding="utf-8") as md_file:
             md_file.write(f"# Source: {source}\n\n")
-            for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
-                md_file.write(c["text"].strip() + "\n\n")
+            if page_chunks:
+                for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
+                    md_file.write(c["text"].strip() + "\n\n")
+            else:
+                raw_text = texts.get(source, "").strip()
+                if raw_text:
+                    md_file.write(raw_text + "\n")
 
     print(f"\n🎉 Ingestion complete.\n"
           f"- JSONL: {jsonl_path}\n"
