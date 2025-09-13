@@ -3,6 +3,7 @@ import os
 import sys
 import uuid
 import json
+import re
 from pathlib import Path
 from collections import defaultdict
 from urllib.parse import urlparse
@@ -40,6 +41,11 @@ def url_to_filename(url: str) -> str:
     if not path:
         return "index"
     return path.replace("/", "_")
+
+
+def extract_rpc_calls(text: str):
+    """Find Mythic RPC call names in text."""
+    return list(set(re.findall(r"(SendMythicRPC\w+|MythicRPC\w+)", text)))
 
 
 def main():
@@ -142,6 +148,10 @@ def main():
 
         title = titles.get(source) or base_name.replace("_", " ").title()
         category = "/".join(base_name.split("_")[:-1]) or "root"
+        raw_text = texts.get(source, "").strip()
+        combined_text = " ".join(c["text"] for c in page_chunks) if page_chunks else raw_text
+
+        rpc_calls = extract_rpc_calls(combined_text)
 
         with open(md_path, "w", encoding="utf-8") as md_file:
             # YAML front-matter
@@ -149,6 +159,10 @@ def main():
             md_file.write(f"source: {source}\n")
             md_file.write(f"title: {title}\n")
             md_file.write(f"category: {category}\n")
+            if rpc_calls:
+                md_file.write("keywords: Mythic, RPC, " + ", ".join(rpc_calls) + "\n")
+            else:
+                md_file.write("keywords: Mythic\n")
             md_file.write(f"---\n\n")
 
             md_file.write(f"# {title}\n\n")
@@ -157,9 +171,15 @@ def main():
                 for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
                     md_file.write(c["text"].strip() + "\n\n")
             else:
-                raw_text = texts.get(source, "").strip()
                 if raw_text:
                     md_file.write(raw_text + "\n")
+
+            # Promote RPCs into their own section
+            if rpc_calls:
+                md_file.write("\n## RPC Calls\n\n")
+                for rpc in rpc_calls:
+                    md_file.write(f"### RPC: {rpc}\n\n")
+                    md_file.write(f"Reference to `{rpc}` found in this page.\n\n")
 
     print(f"\n🎉 Ingestion complete.\n"
           f"- JSONL: {jsonl_path}\n"
