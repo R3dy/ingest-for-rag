@@ -4,20 +4,67 @@ import argparse
 from pathlib import Path
 
 
+def remove_toc_blocks(lines, min_run=5, max_len=40):
+    """
+    Remove TOC-like blocks: runs of many short lines (outside code).
+    """
+    cleaned, buffer = [], []
+    for line in lines:
+        if len(line.strip()) <= max_len and not line.strip().startswith("```"):
+            buffer.append(line)
+            if len(buffer) >= min_run:
+                buffer = []  # drop
+        else:
+            if buffer:
+                cleaned.extend(buffer)
+                buffer = []
+            cleaned.append(line)
+    return cleaned
+
+
+def split_multi_json_blocks(text):
+    """
+    If a ```json block has multiple { } objects, split into separate blocks.
+    """
+    def replacer(match):
+        block = match.group(0)
+        header = block.splitlines()[0]
+        footer = block.splitlines()[-1]
+        body = "\n".join(block.splitlines()[1:-1]).strip()
+
+        # Look for multiple root objects
+        objects = re.split(r"\n\s*or\s*(even)?\s*\n", body, flags=re.IGNORECASE)
+        if len(objects) > 1:
+            parts = []
+            for obj in objects:
+                obj = obj.strip()
+                if obj:
+                    parts.append(f"{header}\n{obj}\n{footer}")
+            return "\n\n".join(parts)
+        return block
+
+    return re.sub(r"```json[\s\S]*?```", replacer, text)
+
+
 def clean_file(path: Path, debug=False):
-    """Clean a single markdown file in place."""
     if debug:
         print(f"[cleanup] Processing {path}")
 
-    text = path.read_text(encoding="utf-8")
+    original = path.read_text(encoding="utf-8")
 
-    # 1. Strip known junk patterns (generic, not Mythic-specific)
+    # Separate front matter (if present)
+    front, body = "", original
+    if original.startswith("---"):
+        parts = original.split("---", 2)
+        if len(parts) >= 3:
+            front = "---" + parts[1] + "---\n\n"
+            body = parts[2]
+
+    # Remove obvious junk
     junk_patterns = [
         r"\bhome page\b",
-        r"\bnavigation\b",
         r"\bsearch\b",
         r"\bissues\b",
-        r"\bgithub\b",
         r"\bslack\b",
         r"\bwas this page helpful\b",
         r"\bcopy\b",
@@ -25,54 +72,35 @@ def clean_file(path: Path, debug=False):
         r"⌘",
         r"\bversion\s+\d+(\.\d+)*",
         r"\bassistant\b",
-        r"\bresponses are generated.*",  # boilerplate disclaimers
+        r"\bresponses are generated.*",
     ]
     for pat in junk_patterns:
-        text = re.sub(pat, "", text, flags=re.IGNORECASE)
+        body = re.sub(pat, "", body, flags=re.IGNORECASE)
 
-    # 2. Collapse duplicate consecutive lines
-    lines = text.splitlines()
+    # Collapse duplicate consecutive lines
+    lines = body.splitlines()
     deduped = []
     for line in lines:
         if not deduped or deduped[-1].strip() != line.strip():
             deduped.append(line)
-    text = "\n".join(deduped)
 
-    # 3. Fix malformed code fences (ensure each ``` closes properly)
-    # If there are odd numbers of fences, add a closing one
-    fence_count = text.count("```")
-    if fence_count % 2 != 0:
-        if debug:
-            print(f"[cleanup] Fixing unbalanced code fence in {path}")
-        text += "\n```"
+    # Remove TOC-like blocks
+    deduped = remove_toc_blocks(deduped)
 
-    # 4. Split multi-example code blocks
-    def split_multi_examples(match):
-        block = match.group(0)
-        if block.count("{") > 1:  # multiple JSON objects, for example
-            parts = re.split(r"\n\s*or\s*\n", block, flags=re.IGNORECASE)
-            return "\n\n".join(parts)
-        return block
+    body = "\n".join(deduped)
 
-    text = re.sub(r"```[a-z]*[\s\S]*?```", split_multi_examples, text)
+    # Split multi-example JSON blocks but KEEP fences
+    body = split_multi_json_blocks(body)
 
-    # 5. Remove long trailing TOC-like blocks (heuristic: 10+ consecutive short lines)
-    lines = text.splitlines()
-    cleaned_lines, buffer = [], []
-    for line in lines:
-        if 1 <= len(line.strip()) <= 20:  # suspiciously short
-            buffer.append(line)
-            if len(buffer) > 10:
-                buffer = []  # drop this block
-        else:
-            if buffer:
-                cleaned_lines.extend(buffer)
-                buffer = []
-            cleaned_lines.append(line)
-    text = "\n".join(cleaned_lines)
+    # Balance fences if needed
+    if body.count("```") % 2 != 0:
+        body += "\n```"
 
-    # Save cleaned file
-    path.write_text(text.strip() + "\n", encoding="utf-8")
+    cleaned = front + body.strip() + "\n"
+    path.write_text(cleaned, encoding="utf-8")
+
+    if debug:
+        print(f"[cleanup] Finished {path}")
 
 
 def main():
