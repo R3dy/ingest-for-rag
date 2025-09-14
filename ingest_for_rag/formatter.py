@@ -22,9 +22,7 @@ def clean_lines(lines):
     return cleaned
 
 def strip_toc_blocks(lines, min_run=5):
-    """
-    Remove TOC-like blocks: runs of numbered items (1. 2. 3. ...) or many short lines.
-    """
+    """Remove TOC-like blocks: runs of numbered items or many short lines."""
     cleaned, buffer = [], []
     for line in lines:
         if re.match(r"^\d+\.\s+\w+", line.strip()):
@@ -36,7 +34,6 @@ def strip_toc_blocks(lines, min_run=5):
                 cleaned.extend(buffer)
                 buffer = []
             cleaned.append(line)
-    # flush trailing buffer
     if len(buffer) < min_run:
         cleaned.extend(buffer)
     return cleaned
@@ -106,6 +103,20 @@ def wrap_code_blocks(text):
 
 def format_markdown(raw_text, source, title, category, keywords):
     """Produce clean Markdown suitable for RAG ingestion."""
+    # 🔎 Special case: raw GitHub Markdown
+    if source.endswith(".md"):
+        body = raw_text.strip()
+        front_matter = f"""---
+source: {source}
+title: {title}
+category: {category}
+keywords: {', '.join(keywords)}
+---
+
+"""
+        return front_matter + body + "\n"
+
+    # 🔎 Default case: crawled HTML converted to text
     lines = raw_text.splitlines()
     lines = clean_lines(lines)
     lines = strip_toc_blocks(lines)
