@@ -14,7 +14,7 @@ from .crawl_docs import crawl
 from .ingest_git import list_repo_files_github, fetch_text_files, chunk_records_for_git
 from .storage import ensure_dirs, collection_name_from_source
 from .text_utils import chunk_docs
-from .formatter import format_markdown   # NEW: Markdown formatting
+from .formatter import format_markdown   # Markdown formatter
 
 
 def parse_args():
@@ -144,16 +144,16 @@ def main():
 
     # Markdown export
     pages = defaultdict(list)
-    texts = {}
+    texts = defaultdict(str)
     titles = {}
     for row in rows:
         pages[row["source"]].append(row)
-        texts[row["source"]] = row["text"]
+        # accumulate ALL chunks for that source
+        texts[row["source"]] += "\n" + row["text"]
         titles[row["source"]] = row.get("title")
 
     all_sources = set(texts.keys()) | set(pages.keys())
     for source in all_sources:
-        page_chunks = pages.get(source, [])
         base_name = url_to_filename(source)
         md_path = md_dir / f"{base_name}.md"
 
@@ -163,7 +163,6 @@ def main():
 
         keywords = generate_keywords(base_name, title, raw_text)
 
-        # 🔥 NEW: Clean + format Markdown output
         md_text = format_markdown(
             raw_text,
             source=source,
