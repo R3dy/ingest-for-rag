@@ -21,7 +21,17 @@ def clean_lines(lines):
         prev = line
     return cleaned
 
-def strip_toc_blocks(lines, min_run=5):
+def strip_nav_headers(lines):
+    """Remove nav junk at the top of Mythic doc pages."""
+    junk = {"Mythic", "K", "Documentation", "GraphQL API", "Development", "MythicRPC", "##### overview"}
+    cleaned = []
+    for i, line in enumerate(lines):
+        if i < 20 and (line.strip() in junk or re.match(r"^\d+\.\s+\w+", line.strip())):
+            continue
+        cleaned.append(line)
+    return cleaned
+
+def strip_toc_blocks(lines, min_run=3):
     """Remove TOC-like blocks: runs of numbered items or many short lines."""
     cleaned, buffer = [], []
     for line in lines:
@@ -101,10 +111,14 @@ def wrap_code_blocks(text):
         out.append("```")
     return "\n".join(out)
 
+def fix_broken_links(text):
+    """Collapse broken links like '(\nURL\n)' into '(URL)'."""
+    return re.sub(r"\(\s*\n\s*(https?://[^\s]+)\s*\n\s*\)", r"(\1)", text)
+
 def format_markdown(raw_text, source, title, category, keywords):
     """Produce clean Markdown suitable for RAG ingestion."""
-    # 🔎 Special case: raw GitHub Markdown
     if source.endswith(".md"):
+        # Raw GitHub Markdown (already clean)
         body = raw_text.strip()
         front_matter = f"""---
 source: {source}
@@ -116,14 +130,16 @@ keywords: {', '.join(keywords)}
 """
         return front_matter + body + "\n"
 
-    # 🔎 Default case: crawled HTML converted to text
+    # Crawled HTML → clean aggressively
     lines = raw_text.splitlines()
+    lines = strip_nav_headers(lines)
     lines = clean_lines(lines)
     lines = strip_toc_blocks(lines)
     lines = dedupe_headings(lines)
     lines = promote_headings(lines)
 
     body = "\n".join(lines)
+    body = fix_broken_links(body)
     body = wrap_code_blocks(body)
 
     front_matter = f"""---
