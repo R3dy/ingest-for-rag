@@ -14,6 +14,7 @@ from .crawl_docs import crawl
 from .ingest_git import list_repo_files_github, fetch_text_files, chunk_records_for_git
 from .storage import ensure_dirs, collection_name_from_source
 from .text_utils import chunk_docs
+from .formatter import format_markdown  # <-- new import
 
 
 def parse_args():
@@ -21,18 +22,18 @@ def parse_args():
         prog="ingest-for-rag",
         description="Ingest a docs site or GitHub repo and build embeddings for RAG (Ollama + Chroma + Markdown).",
     )
-    p.add_argument("-u", "--url", required=True)
-    p.add_argument("-t", "--type", choices=["docs", "git"], required=True)
-    p.add_argument("-o", "--out", required=True)
-    p.add_argument("--ignore-robots", action="store_true")
-    p.add_argument("--max-pages", type=int, default=5000)
-    p.add_argument("--include", default="")
-    p.add_argument("--exclude", default="")
-    p.add_argument("--ollama-base", default=None)
-    p.add_argument("--model", default=None)
-    p.add_argument("--batch-size", type=int, default=16)
-    p.add_argument("--no-chroma", action="store_true")
-    p.add_argument("--debug", action="store_true")
+    p.add_argument("-u", "--url", required=True, help="Docs site base URL or GitHub repo URL")
+    p.add_argument("-t", "--type", choices=["docs", "git"], required=True, help="Ingestion type")
+    p.add_argument("-o", "--out", required=True, help="Output directory")
+    p.add_argument("--ignore-robots", action="store_true", help="Ignore robots.txt (docs mode)")
+    p.add_argument("--max-pages", type=int, default=5000, help="Max pages to crawl (docs mode)")
+    p.add_argument("--include", default="", help="Comma-separated glob filters to include (docs mode)")
+    p.add_argument("--exclude", default="", help="Comma-separated glob filters to exclude (docs mode)")
+    p.add_argument("--ollama-base", default=None, help="Override OLLAMA_BASE")
+    p.add_argument("--model", default=None, help="Ollama embedding model (default from .env or nomic-embed-text)")
+    p.add_argument("--batch-size", type=int, default=16, help="Batch size for embedding calls")
+    p.add_argument("--no-chroma", action="store_true", help="Skip building a Chroma index")
+    p.add_argument("--debug", action="store_true", help="Enable debug logging")
     return p.parse_args()
 
 
@@ -47,66 +48,21 @@ def extract_rpc_calls(text: str):
 
 
 def generate_keywords(base_name: str, title: str, text: str) -> list:
+    """
+    Generate dynamic keywords from slug, title, rpc calls, and code block languages.
+    """
     slug_parts = [part.lower() for part in re.split(r"[-_/]", base_name) if part]
     title_parts = [w.lower() for w in re.split(r"\W+", title) if w]
     rpc_calls = [rpc.lower() for rpc in extract_rpc_calls(text)]
-    keywords = set(slug_parts + title_parts + rpc_calls)
+
+    # detect code block languages
+    code_langs = []
+    for match in re.findall(r"```(\w+)", text):
+        if match.lower() not in code_langs:
+            code_langs.append(match.lower())
+
+    keywords = set(slug_parts + title_parts + rpc_calls + code_langs)
     return sorted(keywords)
-
-
-def annotate_code_blocks(text: str) -> str:
-    """Add semantic headings above properly closed fenced code blocks."""
-    lines = text.splitlines()
-    out_lines = []
-    in_code = False
-    lang = None
-    for line in lines:
-        if line.strip().startswith("```"):
-            if in_code:  # closing
-                out_lines.append(line)
-                in_code, lang = False, None
-            else:  # opening
-                lang = line.strip().lstrip("`").lower()
-                if "json" in lang:
-                    out_lines.append("## Example JSON Block")
-                elif "python" in lang:
-                    out_lines.append("## Example Python Block")
-                elif "bash" in lang or "sh" in lang:
-                    out_lines.append("## Example Shell Block")
-                elif "yaml" in lang or "yml" in lang:
-                    out_lines.append("## Example YAML Block")
-                else:
-                    out_lines.append("## Example Code Block")
-                out_lines.append(line)
-                in_code = True
-        else:
-            out_lines.append(line)
-    return "\n".join(out_lines)
-
-
-def clean_nav_footer_noise(text: str) -> str:
-    """
-    Strip nav/footer/sidebar/UI noise and collapse duplicates.
-    """
-    lines = text.splitlines()
-    cleaned = []
-    for line in lines:
-        low = line.lower().strip()
-        if not line.strip():
-            continue
-        if any(x in low for x in [
-            "home page", "search", "navigation", "issues", "github", "slack",
-            "was this page helpful", "assistant", "responses are generated",
-            "copy", "ask ai", "⌘", "version "
-        ]):
-            continue
-        cleaned.append(line)
-    # drop consecutive duplicate lines
-    out = []
-    for l in cleaned:
-        if not out or out[-1] != l:
-            out.append(l)
-    return "\n".join(out)
 
 
 def main():
@@ -200,39 +156,22 @@ def main():
         page_chunks = pages.get(source, [])
         base_name = url_to_filename(source)
         md_path = md_dir / f"{base_name}.md"
+
         title = titles.get(source) or base_name.replace("_", " ").title()
         category = "/".join(base_name.split("_")[:-1]) or "root"
         raw_text = texts.get(source, "").strip()
-        combined_text = " ".join(c["text"] for c in page_chunks) if page_chunks else raw_text
 
-        combined_text = clean_nav_footer_noise(combined_text)
-        keywords = generate_keywords(base_name, title, combined_text)
-        rpc_calls = extract_rpc_calls(combined_text)
+        keywords = generate_keywords(base_name, title, raw_text)
 
-        with open(md_path, "w", encoding="utf-8") as md_file:
-            md_file.write(f"---\nsource: {source}\ntitle: {title}\ncategory: {category}\n")
-            if keywords:
-                md_file.write("keywords: " + ", ".join(keywords) + "\n")
-            md_file.write("---\n\n")
-            md_file.write(f"# {title}\n\n")
-
-            if page_chunks:
-                for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
-                    text = clean_nav_footer_noise(c["text"].strip())
-                    if not text:
-                        continue
-                    text = annotate_code_blocks(text)
-                    md_file.write(text + "\n\n")
-            else:
-                if raw_text:
-                    raw_text = annotate_code_blocks(clean_nav_footer_noise(raw_text))
-                    if raw_text:
-                        md_file.write(raw_text + "\n")
-
-            if rpc_calls:
-                md_file.write("\n## RPC Calls\n\n")
-                for rpc in rpc_calls:
-                    md_file.write(f"### RPC: {rpc}\n\nReference to `{rpc}` found in this page.\n\n")
+        # format the page into clean Markdown
+        md_text = format_markdown(
+            raw_text,
+            source=source,
+            title=title,
+            category=category,
+            keywords=keywords,
+        )
+        md_path.write_text(md_text, encoding="utf-8")
 
     print(f"\n🎉 Ingestion complete.\n- JSONL: {jsonl_path}\n- Markdown: {md_dir}\n- Chroma: {Path(out_dir, 'chroma')}\n")
 
