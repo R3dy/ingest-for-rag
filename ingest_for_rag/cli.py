@@ -16,11 +16,6 @@ from .storage import ensure_dirs, collection_name_from_source
 from .text_utils import chunk_docs
 
 
-def debug_print(debug, msg):
-    if debug:
-        print(msg)
-
-
 def parse_args():
     p = argparse.ArgumentParser(
         prog="ingest-for-rag",
@@ -60,43 +55,58 @@ def generate_keywords(base_name: str, title: str, text: str) -> list:
 
 
 def annotate_code_blocks(text: str) -> str:
+    """Add semantic headings above properly closed fenced code blocks."""
+    lines = text.splitlines()
     out_lines = []
-    for line in text.splitlines():
+    in_code = False
+    lang = None
+    for line in lines:
         if line.strip().startswith("```"):
-            lang = line.strip().lstrip("`").lower()
-            if "json" in lang:
-                out_lines.append("## Example JSON Block")
-            elif "python" in lang:
-                out_lines.append("## Example Python Block")
-            elif "bash" in lang or "sh" in lang:
-                out_lines.append("## Example Shell Block")
-            elif "yaml" in lang or "yml" in lang:
-                out_lines.append("## Example YAML Block")
-            else:
-                out_lines.append("## Example Code Block")
-            out_lines.append(line)
+            if in_code:  # closing
+                out_lines.append(line)
+                in_code, lang = False, None
+            else:  # opening
+                lang = line.strip().lstrip("`").lower()
+                if "json" in lang:
+                    out_lines.append("## Example JSON Block")
+                elif "python" in lang:
+                    out_lines.append("## Example Python Block")
+                elif "bash" in lang or "sh" in lang:
+                    out_lines.append("## Example Shell Block")
+                elif "yaml" in lang or "yml" in lang:
+                    out_lines.append("## Example YAML Block")
+                else:
+                    out_lines.append("## Example Code Block")
+                out_lines.append(line)
+                in_code = True
         else:
             out_lines.append(line)
     return "\n".join(out_lines)
 
 
 def clean_nav_footer_noise(text: str) -> str:
+    """
+    Strip nav/footer/sidebar/UI noise and collapse duplicates.
+    """
     lines = text.splitlines()
     cleaned = []
     for line in lines:
         low = line.lower().strip()
         if not line.strip():
             continue
-        if "home page" in low or "search" in low or "navigation" in low:
-            continue
-        if "issues" in low or "github" in low or "slack" in low:
-            continue
-        if "was this page helpful" in low or "assistant" in low:
-            continue
-        if low in {"yes", "no"}:
+        if any(x in low for x in [
+            "home page", "search", "navigation", "issues", "github", "slack",
+            "was this page helpful", "assistant", "responses are generated",
+            "copy", "ask ai", "⌘", "version "
+        ]):
             continue
         cleaned.append(line)
-    return "\n".join(cleaned)
+    # drop consecutive duplicate lines
+    out = []
+    for l in cleaned:
+        if not out or out[-1] != l:
+            out.append(l)
+    return "\n".join(out)
 
 
 def main():
@@ -111,10 +121,7 @@ def main():
     include = [g.strip() for g in args.include.split(",") if g.strip()] or None
     exclude = [g.strip() for g in args.exclude.split(",") if g.strip()] or None
 
-    debug_print(args.debug, "[main] Starting ingestion")
-
     if args.type == "docs":
-        debug_print(args.debug, "[main] Crawling docs")
         raw_pages = crawl(
             start_url=args.url,
             out_dir=out_dir,
@@ -125,9 +132,11 @@ def main():
         )
         chunks = []
         for idx, rec in enumerate(raw_pages):
-            debug_print(args.debug, f"[main] Processing record {idx+1}/{len(raw_pages)} ({len(rec['text'])} chars)")
+            if args.debug:
+                print(f"[main] Processing record {idx+1}/{len(raw_pages)} ({len(rec['text'])} chars)")
             chs = chunk_docs(rec["text"], debug=args.debug)
-            debug_print(args.debug, f"[main] Record produced {len(chs)} chunks")
+            if args.debug:
+                print(f"[main] Record produced {len(chs)} chunks")
             for i, ch in enumerate(chs):
                 chunks.append({
                     "source": rec["url"],
@@ -138,9 +147,7 @@ def main():
                     "mode": "docs",
                     "title": rec.get("title"),
                 })
-        debug_print(args.debug, f"[main] Total chunks: {len(chunks)}")
     else:
-        debug_print(args.debug, "[main] Ingesting GitHub repo")
         token = os.environ.get("GITHUB_TOKEN", "")
         meta = list_repo_files_github(args.url, token or None)
         recs = fetch_text_files(meta, out_dir)
@@ -160,10 +167,10 @@ def main():
         col = client.get_or_create_collection(coll_name)
 
     rows = []
-    written = 0
     with open(jsonl_path, "w", encoding="utf-8") as f:
         for i in range(0, len(chunks), args.batch_size):
-            debug_print(args.debug, f"[main] Embedding batch {i//args.batch_size+1}")
+            if args.debug:
+                print(f"[main] Embedding batch {i//args.batch_size+1}")
             batch = chunks[i:i+args.batch_size]
             texts = [c["text"] for c in batch]
             embs = embed_ollama(texts, model=args.model, base=args.ollama_base)
@@ -178,8 +185,6 @@ def main():
                 metas.append({k: v for k, v in c.items() if k not in ("text", "embedding")})
             if col and ids:
                 col.upsert(ids=ids, documents=docs, metadatas=metas, embeddings=embs)
-            written += len(batch)
-            debug_print(args.debug, f"[main] Processed {written}/{len(chunks)}")
 
     # Markdown export
     pages = defaultdict(list)
@@ -199,6 +204,7 @@ def main():
         category = "/".join(base_name.split("_")[:-1]) or "root"
         raw_text = texts.get(source, "").strip()
         combined_text = " ".join(c["text"] for c in page_chunks) if page_chunks else raw_text
+
         combined_text = clean_nav_footer_noise(combined_text)
         keywords = generate_keywords(base_name, title, combined_text)
         rpc_calls = extract_rpc_calls(combined_text)
@@ -209,6 +215,7 @@ def main():
                 md_file.write("keywords: " + ", ".join(keywords) + "\n")
             md_file.write("---\n\n")
             md_file.write(f"# {title}\n\n")
+
             if page_chunks:
                 for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
                     text = clean_nav_footer_noise(c["text"].strip())
@@ -221,12 +228,13 @@ def main():
                     raw_text = annotate_code_blocks(clean_nav_footer_noise(raw_text))
                     if raw_text:
                         md_file.write(raw_text + "\n")
+
             if rpc_calls:
                 md_file.write("\n## RPC Calls\n\n")
                 for rpc in rpc_calls:
                     md_file.write(f"### RPC: {rpc}\n\nReference to `{rpc}` found in this page.\n\n")
 
-    print(f"\n🎉 Ingestion complete.\n- JSONL: {jsonl_path}\n- Markdown: {md_dir}\n- Chroma: {Path(out_dir, 'chroma')}\n- Entries: {written}")
+    print(f"\n🎉 Ingestion complete.\n- JSONL: {jsonl_path}\n- Markdown: {md_dir}\n- Chroma: {Path(out_dir, 'chroma')}\n")
 
 
 if __name__ == "__main__":
