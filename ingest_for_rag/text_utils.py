@@ -19,9 +19,7 @@ CODE_EXTS = {
 def is_probably_binary(path: str) -> bool:
     from pathlib import Path
     ext = Path(path.lower()).suffix
-    if ext in BINARY_EXTS:
-        return True
-    return False
+    return ext in BINARY_EXTS
 
 
 def detect_encoding(data: bytes) -> str:
@@ -47,36 +45,77 @@ def normalize_ws(s: str) -> str:
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
-def chunk_text(s: str, max_chars: int = 1000, overlap: int = 100):
-    """Split text into overlapping chunks with guaranteed forward progress."""
+
+def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150):
+    """Generic sliding-window chunking for plain text."""
     s = s.strip()
     if not s:
         return []
-
     chunks = []
-    n = len(s)
     start = 0
-
+    n = len(s)
     while start < n:
         end = min(start + max_chars, n)
-        chunk = s[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
+        cut = s.rfind("\n\n", start, end)
+        if cut == -1 or cut <= start + 200:
+            cut = end
+        chunks.append(s[start:cut].strip())
+        if cut <= start:
+            start = end
+        else:
+            start = max(0, cut - overlap)
+    out = []
+    for c in chunks:
+        if c and (not out or c != out[-1]):
+            out.append(c)
+    return out
 
-        if end == n:
-            break  # reached the end
-        # move forward but keep overlap
-        start = max(0, end - overlap)
+
+def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150):
+    """
+    Split text into chunks, but keep fenced code blocks (```...```) intact.
+    Prose outside code blocks is split with chunk_text.
+    """
+    lines = s.splitlines()
+    chunks, buffer, in_code = [], [], False
+
+    for line in lines:
+        if line.strip().startswith("```"):  # toggle code block
+            if in_code:
+                buffer.append(line)
+                # flush full code block as one chunk
+                block = "\n".join(buffer).strip()
+                if block:
+                    chunks.append(block)
+                buffer, in_code = [], False
+            else:
+                # flush prose before starting code block
+                if buffer:
+                    prose = "\n".join(buffer).strip()
+                    if prose:
+                        chunks.extend(chunk_text(prose, max_chars, overlap))
+                    buffer = []
+                buffer.append(line)
+                in_code = True
+        else:
+            buffer.append(line)
+
+    # leftover
+    if buffer:
+        text = "\n".join(buffer).strip()
+        if text:
+            if in_code:
+                chunks.append(text)  # unterminated code block
+            else:
+                chunks.extend(chunk_text(text, max_chars, overlap))
 
     return chunks
 
 
 def chunk_docs(s: str):
-    # Docs: ~1200 char chunks
-    return chunk_text(s, max_chars=1200, overlap=150)
+    return chunk_with_code_blocks(s, max_chars=1200, overlap=150)
 
 
 def chunk_code(s: str):
-    # Code: ~800 char chunks
-    return chunk_text(s, max_chars=800, overlap=100)
+    return chunk_with_code_blocks(s, max_chars=800, overlap=100)
 
