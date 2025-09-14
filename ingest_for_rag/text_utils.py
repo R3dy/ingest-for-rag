@@ -50,6 +50,32 @@ def normalize_ws(s: str, debug=False) -> str:
     return s.strip()
 
 
+def clean_nav_footer_noise(text: str, debug=False) -> str:
+    """
+    Strip nav/footer/sidebar/UI noise and collapse duplicates before chunking.
+    """
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        low = line.lower().strip()
+        if not line.strip():
+            continue
+        if any(x in low for x in [
+            "home page", "search", "navigation", "issues", "github", "slack",
+            "was this page helpful", "assistant", "responses are generated",
+            "copy", "ask ai", "⌘", "version "
+        ]):
+            continue
+        cleaned.append(line)
+    # drop consecutive duplicate lines
+    out = []
+    for l in cleaned:
+        if not out or out[-1] != l:
+            out.append(l)
+    debug_print(debug, f"[clean_nav_footer_noise] Reduced {len(lines)} lines → {len(out)} lines")
+    return "\n".join(out)
+
+
 def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150, debug=False):
     debug_print(debug, f"[chunk_text] Input length {len(s)}")
     s = s.strip()
@@ -70,7 +96,7 @@ def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150, debug=False):
         if chunk:
             chunks.append(chunk)
 
-        # 🔧 guarantee forward progress
+        # ✅ guarantee forward progress
         new_start = cut - overlap
         if new_start <= start:
             new_start = start + max_chars
@@ -82,6 +108,9 @@ def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150, debug=False):
 
 def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150, debug=False):
     debug_print(debug, f"[chunk_with_code_blocks] Input length {len(s)}")
+    # Clean first
+    s = clean_nav_footer_noise(s, debug=debug)
+
     lines = s.splitlines()
     chunks, buffer, in_code = [], [], False
 
