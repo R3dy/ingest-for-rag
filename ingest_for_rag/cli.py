@@ -37,10 +37,27 @@ def parse_args():
     return p.parse_args()
 
 
+def safe_filename(name: str) -> str:
+    """
+    Sanitize filenames for .md exports:
+    - only [a-zA-Z0-9._-]
+    - collapse underscores
+    - strip leading/trailing non-alphanumeric
+    """
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
+    name = re.sub(r"_+", "_", name)
+    name = re.sub(r"^[^a-zA-Z0-9]+", "", name)
+    name = re.sub(r"[^a-zA-Z0-9]+$", "", name)
+    if not name:
+        name = "index"
+    return name[:255]  # filesystem safe
+
+
 def url_to_filename(url: str) -> str:
     parsed = urlparse(url)
     path = parsed.path.strip("/")
-    return path.replace("/", "_") if path else "index"
+    base = path.replace("/", "_") if path else "index"
+    return safe_filename(base)
 
 
 def extract_rpc_calls(text: str):
@@ -63,6 +80,22 @@ def generate_keywords(base_name: str, title: str, text: str) -> list:
 
     keywords = set(slug_parts + title_parts + rpc_calls + code_langs)
     return sorted(keywords)
+
+
+def safe_collection_name(source: str) -> str:
+    """
+    Sanitize a collection name to meet Chroma's requirements:
+    - only [a-zA-Z0-9._-]
+    - starts/ends with alphanumeric
+    - length 3–512
+    """
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", source)
+    name = re.sub(r"_+", "_", name)
+    name = re.sub(r"^[^a-zA-Z0-9]+", "", name)
+    name = re.sub(r"[^a-zA-Z0-9]+$", "", name)
+    if len(name) < 3:
+        name = f"col_{name}"
+    return name[:512]
 
 
 def main():
@@ -114,7 +147,9 @@ def main():
     md_dir = Path(out_dir, "md")
     md_dir.mkdir(parents=True, exist_ok=True)
 
-    coll_name = collection_name_from_source(args.url)
+    coll_name_raw = collection_name_from_source(args.url)
+    coll_name = safe_collection_name(coll_name_raw)
+
     client = None
     col = None
     if not args.no_chroma:
@@ -148,7 +183,6 @@ def main():
     titles = {}
     for row in rows:
         pages[row["source"]].append(row)
-        # accumulate ALL chunks for that source
         texts[row["source"]] += "\n" + row["text"]
         titles[row["source"]] = row.get("title")
 
