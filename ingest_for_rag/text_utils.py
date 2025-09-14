@@ -1,6 +1,10 @@
 import re
 import chardet
 
+def debug_print(debug, msg):
+    if debug:
+        print(msg)
+
 BINARY_EXTS = {
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg",
     ".ico", ".webp", ".pdf", ".zip", ".tar", ".gz", ".7z",
@@ -18,20 +22,19 @@ CODE_EXTS = {
 
 def is_probably_binary(path: str) -> bool:
     from pathlib import Path
-    ext = Path(path.lower()).suffix
-    return ext in BINARY_EXTS
+    return Path(path.lower()).suffix in BINARY_EXTS
 
 
 def detect_encoding(data: bytes) -> str:
     try:
         guess = chardet.detect(data)
-        enc = guess.get("encoding") or "utf-8"
-        return enc
+        return guess.get("encoding") or "utf-8"
     except Exception:
         return "utf-8"
 
 
-def safe_decode(data: bytes) -> str:
+def safe_decode(data: bytes, debug=False) -> str:
+    debug_print(debug, f"[safe_decode] Decoding {len(data)} bytes")
     enc = detect_encoding(data)
     try:
         return data.decode(enc, errors="replace")
@@ -39,15 +42,16 @@ def safe_decode(data: bytes) -> str:
         return data.decode("utf-8", errors="replace")
 
 
-def normalize_ws(s: str) -> str:
+def normalize_ws(s: str, debug=False) -> str:
+    debug_print(debug, f"[normalize_ws] Normalizing string of length {len(s)}")
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = re.sub(r"[ \t]+\n", "\n", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
 
-def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150):
-    """Generic sliding-window chunking for prose only."""
+def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150, debug=False):
+    debug_print(debug, f"[chunk_text] Input length {len(s)}")
     s = s.strip()
     if not s:
         return []
@@ -59,28 +63,24 @@ def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150):
         cut = s.rfind("\n\n", start, end)
         if cut == -1 or cut <= start + 200:
             cut = end
-        chunks.append(s[start:cut].strip())
+        chunk = s[start:cut].strip()
+        if chunk:
+            chunks.append(chunk)
         if cut <= start:
             start = end
         else:
             start = max(0, cut - overlap)
-    out = []
-    for c in chunks:
-        if c and (not out or c != out[-1]):
-            out.append(c)
-    return out
+    debug_print(debug, f"[chunk_text] Produced {len(chunks)} chunks")
+    return chunks
 
 
-def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150):
-    """
-    Split text into chunks, but keep fenced code blocks (```...```) intact.
-    If a code block is unterminated, flush it as-is at the end.
-    """
+def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150, debug=False):
+    debug_print(debug, f"[chunk_with_code_blocks] Input length {len(s)}")
     lines = s.splitlines()
     chunks, buffer, in_code = [], [], False
 
     for line in lines:
-        if line.strip().startswith("```"):  # toggle code block
+        if line.strip().startswith("```"):
             if in_code:
                 buffer.append(line)
                 block = "\n".join(buffer).strip()
@@ -91,35 +91,29 @@ def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150):
                 if buffer:
                     prose = "\n".join(buffer).strip()
                     if prose:
-                        chunks.extend(chunk_text(prose, max_chars, overlap))
+                        chunks.extend(chunk_text(prose, max_chars, overlap, debug))
                     buffer = []
                 buffer.append(line)
                 in_code = True
         else:
             buffer.append(line)
 
-    # leftover
     if buffer:
         text = "\n".join(buffer).strip()
         if text:
             if in_code:
-                chunks.append(text)  # flush unterminated code block
+                chunks.append(text)
             else:
-                chunks.extend(chunk_text(text, max_chars, overlap))
+                chunks.extend(chunk_text(text, max_chars, overlap, debug))
 
-    # dedupe consecutive identical chunks
-    out = []
-    for c in chunks:
-        if c and (not out or c != out[-1]):
-            out.append(c)
-
-    return out
+    debug_print(debug, f"[chunk_with_code_blocks] Produced {len(chunks)} chunks")
+    return chunks
 
 
-def chunk_docs(s: str):
-    return chunk_with_code_blocks(s, max_chars=1200, overlap=150)
+def chunk_docs(s: str, debug=False):
+    return chunk_with_code_blocks(s, max_chars=1200, overlap=150, debug=debug)
 
 
-def chunk_code(s: str):
-    return chunk_with_code_blocks(s, max_chars=800, overlap=100)
+def chunk_code(s: str, debug=False):
+    return chunk_with_code_blocks(s, max_chars=800, overlap=100, debug=debug)
 
