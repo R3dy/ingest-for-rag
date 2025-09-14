@@ -44,12 +44,10 @@ def url_to_filename(url: str) -> str:
 
 
 def extract_rpc_calls(text: str):
-    """Find RPC/API call names in text."""
     return list(set(re.findall(r"(Send\w+RPC\w+|MythicRPC\w+)", text)))
 
 
 def generate_keywords(base_name: str, title: str, text: str) -> list:
-    """Generate dynamic keywords per page from slug, title, and RPC calls."""
     slug_parts = [part.lower() for part in re.split(r"[-_/]", base_name) if part]
     title_parts = [w.lower() for w in re.split(r"\W+", title) if w]
     rpc_calls = [rpc.lower() for rpc in extract_rpc_calls(text)]
@@ -58,7 +56,6 @@ def generate_keywords(base_name: str, title: str, text: str) -> list:
 
 
 def annotate_code_blocks(text: str) -> str:
-    """Add semantic headings above fenced code blocks."""
     out_lines = []
     for line in text.splitlines():
         if line.strip().startswith("```"):
@@ -73,23 +70,19 @@ def annotate_code_blocks(text: str) -> str:
                 out_lines.append("## Example YAML Block")
             else:
                 out_lines.append("## Example Code Block")
-            out_lines.append(line)  # keep the code fence
+            out_lines.append(line)
         else:
             out_lines.append(line)
     return "\n".join(out_lines)
 
 
 def clean_nav_footer_noise(text: str) -> str:
-    """
-    Remove common nav/footer/sidebar noise to keep markdown focused.
-    """
     lines = text.splitlines()
     cleaned = []
     for line in lines:
         low = line.lower().strip()
         if not line.strip():
             continue
-        # Drop common UI/nav/footer lines
         if "home page" in low or "search" in low or "navigation" in low:
             continue
         if "issues" in low or "github" in low or "slack" in low:
@@ -183,7 +176,7 @@ def main():
             written += len(batch)
             print(f"✅ Processed {written}/{len(chunks)}")
 
-    # --- Markdown export (one file per page, always) ---
+    # --- Markdown export ---
     pages = defaultdict(list)
     texts = {}
     titles = {}
@@ -205,15 +198,12 @@ def main():
         raw_text = texts.get(source, "").strip()
         combined_text = " ".join(c["text"] for c in page_chunks) if page_chunks else raw_text
 
-        # Clean nav/footer noise
         combined_text = clean_nav_footer_noise(combined_text)
 
-        # Dynamic keywords per page
         keywords = generate_keywords(base_name, title, combined_text)
         rpc_calls = extract_rpc_calls(combined_text)
 
         with open(md_path, "w", encoding="utf-8") as md_file:
-            # YAML front-matter
             md_file.write(f"---\n")
             md_file.write(f"source: {source}\n")
             md_file.write(f"title: {title}\n")
@@ -227,15 +217,16 @@ def main():
             if page_chunks:
                 for c in sorted(page_chunks, key=lambda x: x["chunk_id"]):
                     text = clean_nav_footer_noise(c["text"].strip())
-                    if text:
-                        text = annotate_code_blocks(text)
-                        md_file.write(text + "\n\n")
+                    if not text:
+                        continue
+                    text = annotate_code_blocks(text)
+                    md_file.write(text + "\n\n")
             else:
                 if raw_text:
                     raw_text = annotate_code_blocks(clean_nav_footer_noise(raw_text))
-                    md_file.write(raw_text + "\n")
+                    if raw_text:
+                        md_file.write(raw_text + "\n")
 
-            # RPC promotion
             if rpc_calls:
                 md_file.write("\n## RPC Calls\n\n")
                 for rpc in rpc_calls:

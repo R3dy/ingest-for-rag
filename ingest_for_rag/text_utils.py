@@ -47,7 +47,7 @@ def normalize_ws(s: str) -> str:
 
 
 def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150):
-    """Generic sliding-window chunking for plain text."""
+    """Generic sliding-window chunking for prose only."""
     s = s.strip()
     if not s:
         return []
@@ -74,7 +74,7 @@ def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150):
 def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150):
     """
     Split text into chunks, but keep fenced code blocks (```...```) intact.
-    Prose outside code blocks is split with chunk_text.
+    If a code block is unterminated, flush it as-is at the end.
     """
     lines = s.splitlines()
     chunks, buffer, in_code = [], [], False
@@ -83,13 +83,11 @@ def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150):
         if line.strip().startswith("```"):  # toggle code block
             if in_code:
                 buffer.append(line)
-                # flush full code block as one chunk
                 block = "\n".join(buffer).strip()
                 if block:
                     chunks.append(block)
                 buffer, in_code = [], False
             else:
-                # flush prose before starting code block
                 if buffer:
                     prose = "\n".join(buffer).strip()
                     if prose:
@@ -105,11 +103,17 @@ def chunk_with_code_blocks(s: str, max_chars: int = 1200, overlap: int = 150):
         text = "\n".join(buffer).strip()
         if text:
             if in_code:
-                chunks.append(text)  # unterminated code block
+                chunks.append(text)  # flush unterminated code block
             else:
                 chunks.extend(chunk_text(text, max_chars, overlap))
 
-    return chunks
+    # dedupe consecutive identical chunks
+    out = []
+    for c in chunks:
+        if c and (not out or c != out[-1]):
+            out.append(c)
+
+    return out
 
 
 def chunk_docs(s: str):
