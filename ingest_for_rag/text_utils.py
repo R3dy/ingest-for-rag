@@ -55,21 +55,27 @@ def chunk_text(s: str, max_chars: int = 1200, overlap: int = 150, debug=False):
     s = s.strip()
     if not s:
         return []
+
     chunks = []
     start = 0
     n = len(s)
+
     while start < n:
         end = min(start + max_chars, n)
         cut = s.rfind("\n\n", start, end)
         if cut == -1 or cut <= start + 200:
             cut = end
+
         chunk = s[start:cut].strip()
         if chunk:
             chunks.append(chunk)
-        if cut <= start:
-            start = end
-        else:
-            start = max(0, cut - overlap)
+
+        # 🔧 guarantee forward progress
+        new_start = cut - overlap
+        if new_start <= start:
+            new_start = start + max_chars
+        start = max(0, new_start)
+
     debug_print(debug, f"[chunk_text] Produced {len(chunks)} chunks")
     return chunks
 
