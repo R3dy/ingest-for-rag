@@ -14,7 +14,7 @@ from .crawl_docs import crawl
 from .ingest_git import list_repo_files_github, fetch_text_files, chunk_records_for_git
 from .storage import ensure_dirs, collection_name_from_source
 from .text_utils import chunk_docs
-from .formatter import format_markdown  # <-- new import
+from .formatter import format_markdown   # NEW: Markdown formatting
 
 
 def parse_args():
@@ -163,7 +163,7 @@ def main():
 
         keywords = generate_keywords(base_name, title, raw_text)
 
-        # format the page into clean Markdown
+        # 🔥 NEW: Clean + format Markdown output
         md_text = format_markdown(
             raw_text,
             source=source,
