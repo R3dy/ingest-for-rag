@@ -130,6 +130,21 @@ keywords: {', '.join(keywords)}
 """
         return front_matter + body + "\n"
 
+    if source.lower().endswith(".pdf"):
+        # PDF extracted text — light cleanup only
+        body = raw_text.strip()
+        front_matter = f"""---
+source: {source}
+title: {title}
+category: {category}
+keywords: {', '.join(keywords)}
+---
+
+# {title}
+
+"""
+        return front_matter + body + "\n"
+
     # Crawled HTML → clean aggressively
     lines = raw_text.splitlines()
     lines = strip_nav_headers(lines)

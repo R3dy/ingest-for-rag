@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from .crawl_docs import crawl
 from .ingest_git import list_repo_files_github, fetch_text_files, chunk_records_for_git
+from .ingest_pdf import ingest_pdfs, chunk_records_for_pdf
 from .storage import ensure_dirs, collection_name_from_source
 from .text_utils import chunk_docs
 from .formatter import format_markdown   # Markdown formatter
@@ -22,8 +23,9 @@ def parse_args():
         prog="ingest-for-rag",
         description="Ingest a docs site or GitHub repo and build embeddings for RAG (Ollama + Chroma + Markdown).",
     )
-    p.add_argument("-u", "--url", required=True, help="Docs site base URL or GitHub repo URL")
-    p.add_argument("-t", "--type", choices=["docs", "git"], required=True, help="Ingestion type")
+    p.add_argument("-u", "--url", default=None, help="Docs site base URL or GitHub repo URL (docs/git mode)")
+    p.add_argument("-d", "--dir", default=None, help="Directory containing PDF files (pdf mode)")
+    p.add_argument("-t", "--type", choices=["docs", "git", "pdf"], required=True, help="Ingestion type")
     p.add_argument("-o", "--out", required=True, help="Output directory")
     p.add_argument("--ignore-robots", action="store_true", help="Ignore robots.txt (docs mode)")
     p.add_argument("--max-pages", type=int, default=5000, help="Max pages to crawl (docs mode)")
@@ -53,10 +55,15 @@ def safe_filename(name: str) -> str:
     return name[:255]  # filesystem safe
 
 
-def url_to_filename(url: str) -> str:
-    parsed = urlparse(url)
-    path = parsed.path.strip("/")
-    base = path.replace("/", "_") if path else "index"
+def source_to_filename(source: str) -> str:
+    """Convert a source (URL or file path) to a safe filename."""
+    if source.startswith(("http://", "https://")):
+        parsed = urlparse(source)
+        path = parsed.path.strip("/")
+        base = path.replace("/", "_") if path else "index"
+    else:
+        # File path — use the stem (filename without extension)
+        base = Path(source).stem
     return safe_filename(base)
 
 
@@ -102,6 +109,14 @@ def main():
     load_dotenv()
     args = parse_args()
 
+    # Validate required arguments per mode
+    if args.type in ("docs", "git") and not args.url:
+        print("Error: -u/--url is required for docs and git modes.")
+        sys.exit(1)
+    if args.type == "pdf" and not args.dir:
+        print("Error: -d/--dir is required for pdf mode.")
+        sys.exit(1)
+
     from .embeddings import embed_ollama
 
     out_dir = args.out
@@ -136,6 +151,9 @@ def main():
                     "mode": "docs",
                     "title": rec.get("title"),
                 })
+    elif args.type == "pdf":
+        raw_records = ingest_pdfs(args.dir, out_dir, debug=args.debug)
+        chunks = chunk_records_for_pdf(raw_records, debug=args.debug)
     else:
         token = os.environ.get("GITHUB_TOKEN", "")
         meta = list_repo_files_github(args.url, token or None)
@@ -147,7 +165,8 @@ def main():
     md_dir = Path(out_dir, "md")
     md_dir.mkdir(parents=True, exist_ok=True)
 
-    coll_name_raw = collection_name_from_source(args.url)
+    source_label = args.url if args.type != "pdf" else os.path.basename(os.path.abspath(args.dir))
+    coll_name_raw = collection_name_from_source(source_label)
     coll_name = safe_collection_name(coll_name_raw)
 
     client = None
@@ -188,7 +207,7 @@ def main():
 
     all_sources = set(texts.keys()) | set(pages.keys())
     for source in all_sources:
-        base_name = url_to_filename(source)
+        base_name = source_to_filename(source)
         md_path = md_dir / f"{base_name}.md"
 
         title = titles.get(source) or base_name.replace("_", " ").title()
