@@ -1,11 +1,12 @@
 # ingest-for-rag
 
-A one-command ingestion tool for building **Retrieval-Augmented Generation (RAG)** datasets from either:
+A one-command ingestion tool for building **Retrieval-Augmented Generation (RAG)** datasets from:
 
-- **Docs sites** (Markdown, HTML, TXT, etc.)  
-- **GitHub repositories** (source code + docs)  
+- **Docs sites** (Markdown, HTML, TXT, etc.)
+- **GitHub repositories** (source code + docs)
+- **PDF directories** (bulk PDF text extraction)
 
-It crawls or fetches content, chunks it intelligently, embeds it with **[Ollama](https://ollama.ai/)**, and saves the results in multiple formats:
+It crawls, fetches, or extracts content, chunks it intelligently, embeds it with **[Ollama](https://ollama.ai/)**, and saves the results in multiple formats:
 
 - **Raw text dumps** (`output/raw/`)  
 - **Processed JSONL with embeddings** (`output/processed/entries.jsonl`)  
@@ -22,9 +23,13 @@ Built by Royce Davis with development assistance from **ChatGPT (OpenAI GPT-5)**
   Recursively crawls a documentation site. Respects `robots.txt` (unless overridden).  
   Extracts visible text from Markdown, HTML, and plain text files.  
 
-- **Git mode**  
-  Fetches repo contents using the GitHub API (no full clone needed).  
-  Indexes source code and docs, skips binaries automatically.  
+- **Git mode**
+  Fetches repo contents using the GitHub API (no full clone needed).
+  Indexes source code and docs, skips binaries automatically.
+
+- **PDF mode**
+  Recursively scans a local directory for PDF files.
+  Extracts text via [PyMuPDF](https://pymupdf.readthedocs.io/), pulls titles from PDF metadata with smart fallbacks, and feeds everything through the standard chunking/embedding pipeline.
 
 - **Embeddings via Ollama**  
   Uses `ollama/api/embeddings` (default model: `nomic-embed-text`, configurable).  
@@ -65,6 +70,27 @@ export GITHUB_TOKEN=ghp_xxx   # optional for private repos / higher rate limits
 ingest-for-rag -u https://github.com/MythicAgents/Medusa -t git -o ./output
 ```
 
+**PDF directory:**
+
+```bash
+ingest-for-rag -t pdf -d /path/to/pdfs -o ./output
+```
+
+This recursively finds every `.pdf` under the given directory, extracts the
+text from each file, chunks it, generates embeddings, and writes the same
+multi-format output (JSONL, Chroma, Markdown) as the other modes.
+
+You can combine it with the usual flags — for example, to skip Chroma and use
+a remote Ollama instance:
+
+```bash
+ingest-for-rag -t pdf -d ./research-papers \
+  --ollama-base http://gpu-box:11434 \
+  --model nomic-embed-text \
+  --no-chroma \
+  -o ./output
+```
+
 ---
 
 ## 📂 Output Structure
@@ -89,8 +115,9 @@ output/
 
 | Flag              | Description |
 |-------------------|-------------|
-| `-u, --url`       | Docs base URL or GitHub repo URL (required) |
-| `-t, --type`      | Ingestion type: `docs` or `git` (required) |
+| `-u, --url`       | Docs base URL or GitHub repo URL (required for `docs`/`git`) |
+| `-t, --type`      | Ingestion type: `docs`, `git`, or `pdf` (required) |
+| `-d, --dir`       | Directory containing PDF files (required for `pdf`) |
 | `-o, --out`       | Output directory (required) |
 | `--ignore-robots` | Ignore robots.txt in docs mode |
 | `--max-pages`     | Max pages to crawl (default: 5000) |
